@@ -1,0 +1,5 @@
+[build]
+  nixpkgs = 'https://github.com/NixOS/nixpkgs/archive/nixpkgs-unstable.tar.gz'
+
+[start]
+  cmd = 'python simple-ai-router.py'
