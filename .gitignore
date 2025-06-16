@@ -1,0 +1,28 @@
+# Environment variables (contains sensitive API keys)
+.env
+
+# Large binary files
+cloudflared.exe
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.coverage
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

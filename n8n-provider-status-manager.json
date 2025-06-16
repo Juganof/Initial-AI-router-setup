@@ -1,0 +1,150 @@
+{
+  "name": "Provider Status Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Check Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS provider_status (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  provider TEXT UNIQUE NOT NULL,\n  available INTEGER DEFAULT 1,\n  priority INTEGER NOT NULL,\n  last_failed TEXT,\n  recovery_time TEXT,\n  total_requests INTEGER DEFAULT 0,\n  failed_requests INTEGER DEFAULT 0,\n  created_at TEXT DEFAULT (datetime('now')),\n  updated_at TEXT DEFAULT (datetime('now'))\n)",
+        "options": {}
+      },
+      "id": "create-table",
+      "name": "Create Status Table",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT OR IGNORE INTO provider_status (provider, priority, available) VALUES \n('github_models', 1, 1),\n('openrouter', 2, 1),\n('google_gemini', 3, 1)",
+        "options": {}
+      },
+      "id": "init-providers",
+      "name": "Initialize Providers",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "UPDATE provider_status \nSET available = 1, recovery_time = NULL \nWHERE available = 0 AND datetime('now') > recovery_time",
+        "options": {}
+      },
+      "id": "recover-providers",
+      "name": "Recover Providers",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "select",
+        "query": "SELECT \n  provider,\n  CASE WHEN available = 1 THEN 'Available' ELSE 'Rate Limited' END as status,\n  priority,\n  total_requests,\n  failed_requests,\n  CASE WHEN failed_requests > 0 THEN ROUND((failed_requests * 100.0 / total_requests), 2) ELSE 0 END as error_rate,\n  last_failed,\n  recovery_time,\n  CASE \n    WHEN available = 0 AND recovery_time IS NOT NULL THEN \n      CASE \n        WHEN datetime('now') > recovery_time THEN 'Ready to recover'\n        ELSE 'Recovering until ' || recovery_time\n      END\n    ELSE 'Active'\n  END as recovery_status\nFROM provider_status \nORDER BY priority",
+        "options": {}
+      },
+      "id": "get-status",
+      "name": "Get Current Status",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log provider status for monitoring\nconst providers = $input.all();\nconst timestamp = new Date().toISOString();\n\nconsole.log(`\\n=== Provider Status Check - ${timestamp} ===`);\n\nfor (const provider of providers) {\n  const p = provider.json;\n  console.log(`${p.provider.toUpperCase()}:`);\n  console.log(`  Status: ${p.status}`);\n  console.log(`  Priority: ${p.priority}`);\n  console.log(`  Requests: ${p.total_requests} (${p.error_rate}% error rate)`);\n  console.log(`  Recovery: ${p.recovery_status}`);\n  if (p.last_failed) {\n    console.log(`  Last Failed: ${p.last_failed}`);\n  }\n  console.log('');\n}\n\nconst availableCount = providers.filter(p => p.json.status === 'Available').length;\nconst totalCount = providers.length;\n\nconsole.log(`Summary: ${availableCount}/${totalCount} providers available`);\n\nreturn {\n  timestamp,\n  providers: providers.map(p => p.json),\n  available_count: availableCount,\n  total_count: totalCount,\n  all_providers_down: availableCount === 0\n};"
+      },
+      "id": "log-status",
+      "name": "Log Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Check Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Create Status Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Status Table": {
+      "main": [
+        [
+          {
+            "node": "Initialize Providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Providers": {
+      "main": [
+        [
+          {
+            "node": "Recover Providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recover Providers": {
+      "main": [
+        [
+          {
+            "node": "Get Current Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Status": {
+      "main": [
+        [
+          {
+            "node": "Log Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

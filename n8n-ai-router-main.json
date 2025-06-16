@@ -1,0 +1,498 @@
+{
+  "name": "AI Router - Main",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-request",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "AI Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "ai-router-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and prepare the incoming request\nconst body = $input.first().json.body;\n\n// Default values\nconst request = {\n  prompt: body.prompt || '',\n  model_type: body.model_type || 'chat',\n  max_tokens: body.max_tokens || 1000,\n  temperature: body.temperature || 0.7,\n  system_prompt: body.system_prompt || '',\n  request_id: Math.random().toString(36).substring(7)\n};\n\n// Validation\nif (!request.prompt) {\n  throw new Error('Prompt is required');\n}\n\nif (request.max_tokens > 4000) {\n  request.max_tokens = 4000; // Safety limit\n}\n\nif (request.temperature < 0 || request.temperature > 1) {\n  request.temperature = 0.7; // Safe default\n}\n\n// Add metadata\nrequest.timestamp = new Date().toISOString();\nrequest.ip = $input.first().json.headers['x-forwarded-for'] || 'unknown';\n\nreturn { request };"
+      },
+      "id": "validate-request",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "select",
+        "query": "SELECT provider, available, last_failed, recovery_time FROM provider_status WHERE available = 1 OR (available = 0 AND datetime('now') > recovery_time) ORDER BY priority ASC",
+        "options": {}
+      },
+      "id": "get-provider-status",
+      "name": "Get Available Providers",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determine which provider to use\nconst request = $('Validate Request').first().json.request;\nconst providers = $input.all();\n\n// Provider priority order\nconst providerPriority = ['github_models', 'openrouter', 'google_gemini'];\n\n// Find first available provider\nlet selectedProvider = null;\nfor (const provider of providerPriority) {\n  const found = providers.find(p => p.json.provider === provider);\n  if (found) {\n    selectedProvider = provider;\n    break;\n  }\n}\n\n// If no providers available, use first in priority (will likely fail but we'll handle it)\nif (!selectedProvider) {\n  selectedProvider = 'github_models';\n}\n\nreturn {\n  request,\n  selected_provider: selectedProvider,\n  attempt: 1\n};"
+      },
+      "id": "select-provider",
+      "name": "Select Provider",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "github-condition",
+              "leftValue": "={{ $json.selected_provider }}",
+              "rightValue": "github_models",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "openrouter-condition", 
+              "leftValue": "={{ $json.selected_provider }}",
+              "rightValue": "openrouter",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "route-to-provider",
+      "name": "Route to Provider",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://models.inference.ai.azure.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.GITHUB_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "messages",
+              "value": "={{ [{\"role\": \"system\", \"content\": $json.request.system_prompt || \"You are a helpful AI assistant.\"}, {\"role\": \"user\", \"content\": $json.request.prompt}] }}"
+            },
+            {
+              "name": "model",
+              "value": "gpt-4o"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $json.request.max_tokens }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $json.request.temperature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "github-models-api",
+      "name": "GitHub Models API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 180],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENROUTER_API_KEY }}"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n-ai-router.local"
+            },
+            {
+              "name": "X-Title",
+              "value": "N8N AI Router"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "meta-llama/llama-3.1-8b-instruct:free"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{\"role\": \"system\", \"content\": $json.request.system_prompt || \"You are a helpful AI assistant.\"}, {\"role\": \"user\", \"content\": $json.request.prompt}] }}"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $json.request.max_tokens }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $json.request.temperature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "openrouter-api",
+      "name": "OpenRouter API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "{{ $env.GOOGLE_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contents",
+              "value": "={{ [{\"parts\": [{\"text\": ($json.request.system_prompt ? $json.request.system_prompt + \"\\n\\n\" : \"\") + $json.request.prompt}]}] }}"
+            },
+            {
+              "name": "generationConfig",
+              "value": "={{ {\"maxOutputTokens\": $json.request.max_tokens, \"temperature\": $json.request.temperature} }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "gemini-api",
+      "name": "Google Gemini API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 420],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process API response and handle errors\nconst originalRequest = $('Select Provider').first().json.request;\nconst selectedProvider = $('Select Provider').first().json.selected_provider;\nconst attempt = $('Select Provider').first().json.attempt;\n\nconst apiResponse = $input.first();\n\n// Check if request was successful\nif (apiResponse.json && !apiResponse.error) {\n  let response, model, tokensUsed;\n  \n  // Parse response based on provider\n  switch (selectedProvider) {\n    case 'github_models':\n      if (apiResponse.json.choices && apiResponse.json.choices[0]) {\n        response = apiResponse.json.choices[0].message.content;\n        model = apiResponse.json.model || 'gpt-4o';\n        tokensUsed = apiResponse.json.usage?.total_tokens || 0;\n      }\n      break;\n      \n    case 'openrouter':\n      if (apiResponse.json.choices && apiResponse.json.choices[0]) {\n        response = apiResponse.json.choices[0].message.content;\n        model = apiResponse.json.model || 'llama-3.1-8b';\n        tokensUsed = apiResponse.json.usage?.total_tokens || 0;\n      }\n      break;\n      \n    case 'google_gemini':\n      if (apiResponse.json.candidates && apiResponse.json.candidates[0]) {\n        response = apiResponse.json.candidates[0].content.parts[0].text;\n        model = 'gemini-1.5-flash';\n        tokensUsed = apiResponse.json.usageMetadata?.totalTokenCount || 0;\n      }\n      break;\n  }\n  \n  if (response) {\n    return {\n      success: true,\n      response: response,\n      provider: selectedProvider,\n      model: model,\n      tokens_used: tokensUsed,\n      processing_time: (Date.now() - new Date(originalRequest.timestamp).getTime()) / 1000,\n      request_id: originalRequest.request_id,\n      should_update_status: true,\n      status_update: {\n        provider: selectedProvider,\n        success: true\n      }\n    };\n  }\n}\n\n// Handle errors\nlet isRateLimit = false;\nlet errorMessage = 'Unknown error';\n\nif (apiResponse.error) {\n  errorMessage = apiResponse.error.message || apiResponse.error;\n  // Check for rate limiting\n  if (apiResponse.error.code === 429 || \n      errorMessage.toLowerCase().includes('rate limit') ||\n      errorMessage.toLowerCase().includes('quota exceeded') ||\n      errorMessage.toLowerCase().includes('too many requests')) {\n    isRateLimit = true;\n  }\n} else if (apiResponse.json && apiResponse.json.error) {\n  errorMessage = apiResponse.json.error.message || apiResponse.json.error;\n  if (errorMessage.toLowerCase().includes('rate limit') ||\n      errorMessage.toLowerCase().includes('quota exceeded')) {\n    isRateLimit = true;\n  }\n}\n\nreturn {\n  success: false,\n  error: errorMessage,\n  provider: selectedProvider,\n  is_rate_limit: isRateLimit,\n  attempt: attempt,\n  should_retry: attempt < 3,\n  should_update_status: isRateLimit,\n  status_update: {\n    provider: selectedProvider,\n    success: false,\n    is_rate_limit: isRateLimit\n  },\n  request_id: originalRequest.request_id\n};"
+      },
+      "id": "process-response",
+      "name": "Process Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "success-condition",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-success",
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "UPDATE provider_status SET \n  available = CASE WHEN {{ $json.status_update.success }} THEN 1 ELSE 0 END,\n  last_failed = CASE WHEN {{ $json.status_update.success }} THEN last_failed ELSE datetime('now') END,\n  recovery_time = CASE \n    WHEN {{ $json.status_update.success }} THEN NULL\n    WHEN {{ $json.status_update.is_rate_limit }} THEN \n      CASE \n        WHEN '{{ $json.status_update.provider }}' = 'github_models' THEN datetime('now', '+1 hour')\n        WHEN '{{ $json.status_update.provider }}' = 'openrouter' THEN datetime('now', '+15 minutes')\n        WHEN '{{ $json.status_update.provider }}' = 'google_gemini' THEN datetime('now', '+1 minute')\n        ELSE datetime('now', '+15 minutes')\n      END\n    ELSE datetime('now', '+5 minutes')\n  END,\n  total_requests = total_requests + 1,\n  failed_requests = CASE WHEN {{ $json.status_update.success }} THEN failed_requests ELSE failed_requests + 1 END\nWHERE provider = '{{ $json.status_update.provider }}'"
+      },
+      "id": "update-provider-status",
+      "name": "Update Provider Status",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [2000, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2220, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-retry-condition",
+              "leftValue": "={{ $json.should_retry }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-retry",
+      "name": "Should Retry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"error\": $json.error, \"provider\": $json.provider, \"request_id\": $json.request_id, \"message\": \"All providers failed or rate limited. Please try again later.\" } }}",
+        "responseCode": 503
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2220, 540]
+    }
+  ],
+  "connections": {
+    "AI Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Get Available Providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Available Providers": {
+      "main": [
+        [
+          {
+            "node": "Select Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Provider": {
+      "main": [
+        [
+          {
+            "node": "Route to Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route to Provider": {
+      "main": [
+        [
+          {
+            "node": "GitHub Models API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenRouter API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Gemini API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub Models API": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter API": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini API": {
+      "main": [
+        [
+          {
+            "node": "Process Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Update Provider Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Provider Status": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Retry": {
+      "main": [
+        [
+          {
+            "node": "Get Available Providers",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

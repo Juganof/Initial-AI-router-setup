@@ -1,0 +1,266 @@
+{
+  "name": "AI Rotation Demo Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-demo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8b0b98e4-d5a6-4b5a-9f3a-2c1e8d7f6a5b",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "ai-demo-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate input from webhook\nconst body = $input.first().json.body || {};\n\n// Default values and validation\nconst userPrompt = body.prompt || 'Hello! Please introduce yourself.';\nconst requestType = body.type || 'chat';\nconst userMessage = body.message || '';\n\n// Determine the appropriate AI request based on type\nlet aiRequest = {\n  prompt: userPrompt,\n  model_type: 'chat',\n  max_tokens: 500,\n  temperature: 0.7\n};\n\n// Customize based on request type\nswitch(requestType.toLowerCase()) {\n  case 'code':\n    aiRequest.model_type = 'code';\n    aiRequest.temperature = 0.3;\n    aiRequest.system_prompt = 'You are an expert programmer. Write clean, well-documented code with explanations.';\n    break;\n    \n  case 'creative':\n    aiRequest.model_type = 'creative';\n    aiRequest.temperature = 0.9;\n    aiRequest.system_prompt = 'You are a creative writer. Be imaginative and engaging.';\n    break;\n    \n  case 'summary':\n    aiRequest.model_type = 'chat';\n    aiRequest.temperature = 0.4;\n    aiRequest.max_tokens = 300;\n    aiRequest.system_prompt = 'You are an expert summarizer. Create concise, clear summaries.';\n    break;\n    \n  case 'email':\n    aiRequest.model_type = 'chat';\n    aiRequest.temperature = 0.6;\n    aiRequest.system_prompt = 'You are a professional email assistant. Write clear, courteous business emails.';\n    break;\n    \n  default: // chat\n    aiRequest.system_prompt = 'You are a helpful AI assistant. Be informative and friendly.';\n}\n\n// If user provided a specific message, use it\nif (userMessage) {\n  aiRequest.prompt = userMessage;\n}\n\nreturn {\n  ai_request: aiRequest,\n  original_input: {\n    prompt: userPrompt,\n    type: requestType,\n    message: userMessage\n  },\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "Prepare AI Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5000/ai-request",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "={{ $json.ai_request.prompt }}"
+            },
+            {
+              "name": "model_type",
+              "value": "={{ $json.ai_request.model_type }}"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $json.ai_request.max_tokens }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $json.ai_request.temperature }}"
+            },
+            {
+              "name": "system_prompt",
+              "value": "={{ $json.ai_request.system_prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {}
+          }
+        }
+      },
+      "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
+      "name": "Call AI Rotation System",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "success-condition",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+      "name": "Check AI Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format successful response\nconst aiResponse = $input.first().json;\nconst originalData = $('Prepare AI Request').first().json;\n\nconst response = {\n  success: true,\n  data: {\n    request_type: originalData.original_input.type,\n    ai_response: aiResponse.response,\n    provider_used: aiResponse.provider,\n    model_used: aiResponse.model,\n    tokens_consumed: aiResponse.tokens_used,\n    processing_time: aiResponse.processing_time,\n    request_id: aiResponse.request_id\n  },\n  metadata: {\n    timestamp: originalData.timestamp,\n    workflow: 'ai-rotation-demo'\n  }\n};\n\nreturn response;"
+      },
+      "id": "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a",
+      "name": "Format Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format error response\nconst aiResponse = $input.first().json;\nconst originalData = $('Prepare AI Request').first().json;\n\nconst response = {\n  success: false,\n  error: {\n    message: aiResponse.error || 'AI request failed',\n    provider_attempted: aiResponse.provider || 'unknown',\n    request_id: aiResponse.request_id || 'unknown'\n  },\n  data: {\n    request_type: originalData.original_input.type,\n    original_prompt: originalData.original_input.prompt\n  },\n  metadata: {\n    timestamp: originalData.timestamp,\n    workflow: 'ai-rotation-demo'\n  }\n};\n\nreturn response;"
+      },
+      "id": "5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b",
+      "name": "Format Error Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "responseCode": 500
+      },
+      "id": "7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Request": {
+      "main": [
+        [
+          {
+            "node": "Call AI Rotation System",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AI Rotation System": {
+      "main": [
+        [
+          {
+            "node": "Check AI Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check AI Success": {
+      "main": [
+        [
+          {
+            "node": "Format Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Response": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Response": {
+      "main": [
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "ai-demo",
+      "name": "AI Demo"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

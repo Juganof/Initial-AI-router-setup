@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-ai-router
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Basic n8n configuration
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-changeme123}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      
+      # Database configuration (SQLite for simplicity)
+      - DB_TYPE=sqlite
+      - DB_SQLITE_DATABASE=/home/node/.n8n/database.sqlite
+      
+      # AI Provider API Keys
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      
+      # Webhook configuration
+      - WEBHOOK_URL=http://localhost:5678
+      - N8N_SKIP_WEBHOOK_DEREGISTRATION_SHUTDOWN=true
+      
+      # Performance settings
+      - N8N_PAYLOAD_SIZE_MAX=16
+      - N8N_METRICS=true
+      - N8N_LOG_LEVEL=info
+      
+      # Security settings
+      - N8N_SECURE_COOKIE=false
+      - N8N_PERSIST_SESSIONS=true
+      
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/home/node/.n8n/workflows
+      - ./backups:/home/node/.n8n/backups
+    
+    networks:
+      - n8n-network
+    
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  n8n_data:
+    driver: local
+
+networks:
+  n8n-network:
+    driver: bridge
